@@ -1,124 +1,108 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Company Org Chart</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/d3-org-chart@2.6.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/d3-flextree@2.1.2/build/d3-flextree.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.3.1/jspdf.umd.min.js"></script>
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px; }
-        #chart-container { height: 800px; background-color: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        .controls { margin-bottom: 20px; text-align: center; }
-        button {
-            padding: 10px 20px; font-size: 14px; cursor: pointer;
-            background-color: #333; color: white; border: none; border-radius: 4px; margin: 0 5px;
-        }
-        button:hover { background-color: #555; }
-        /* Custom styles to match your image */
-        .node-box {
-            border: 1px solid #999;
-            background: #fff;
-            width: 220px;
-        }
-        .node-header {
-            background-color: #ccc; /* Gray header like the image */
-            padding: 8px;
-            text-align: center;
-            font-weight: bold;
-            border-bottom: 1px solid #999;
-            font-size: 14px;
-        }
-        .node-stats {
-            font-size: 11px;
-            font-weight: normal;
-            margin-top: 4px;
-        }
-        .node-content {
-            padding: 10px;
-            text-align: center;
-            font-size: 14px;
-        }
-    </style>
-</head>
-<body>
+<div id="debug-console" style="background: #333; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 20px; border-radius: 5px;">
+    <strong>Debug Log:</strong><br>
+</div>
 
-    <div class="controls">
-        <button onclick="downloadPdf()">Download PDF</button>
-        <button onclick="chart.fit()">Fit to Screen</button>
-    </div>
+<script>
+    // --- 1. SETUP VISUAL LOGGING (So you can see errors on mobile) ---
+    function logToScreen(message, isError = false) {
+        const consoleDiv = document.getElementById('debug-console');
+        const line = document.createElement('div');
+        line.style.color = isError ? '#ff4444' : '#0f0';
+        line.style.borderBottom = '1px solid #444';
+        line.style.padding = '4px 0';
+        line.textContent = (isError ? '[ERROR] ' : '[INFO] ') + message;
+        consoleDiv.appendChild(line);
+    }
+    
+    // Capture standard errors
+    window.onerror = function(msg, url, line) {
+        logToScreen(`${msg} (Line ${line})`, true);
+    };
 
-    <div id="chart-container"></div>
+    // --- 2. CHART CODE ---
+    
+   
+    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
+    const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+    
+    // We use a proxy to bypass CORS restrictions on mobile/web
+    const csvUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
 
-    <script>
-        // REPLACE THIS URL WITH YOUR GOOGLE SHEET CSV LINK
-        const csvUrl = 'https://docs.google.com/spreadsheets/d/1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM/export?format=csv';
+    logToScreen("Attempting to fetch data from: " + csvUrl);
 
-        let chart;
-
-        Papa.parse(csvUrl, {
-            download: true,
-            header: true,
-            complete: function(results) {
-                const data = results.data;
-                renderChart(data);
+    Papa.parse(csvUrl, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+            logToScreen(`Download complete! Found ${results.data.length} rows.`);
+            
+            if (results.data.length === 0) {
+                logToScreen("Error: Data is empty. Check your Sheet permissions (Anyone with link?).", true);
+                return;
             }
-        });
 
-        function renderChart(data) {
-            // Clean data to remove empty rows
-            const cleanData = data.filter(d => d.id && d.id.trim() !== '');
+            try {
+                renderChart(results.data);
+                logToScreen("Chart rendered successfully!");
+            } catch (e) {
+                logToScreen("Render Error: " + e.message, true);
+            }
+        },
+        error: function(err) {
+            logToScreen("CSV Parse Error: " + err.message, true);
+        }
+    });
 
-            chart = new d3.OrgChart()
-                .container('#chart-container')
-                .data(cleanData)
-                .nodeHeight(d => 100)
-                .nodeWidth(d => 220)
-                .childrenMargin(d => 50)
-                .compactMarginBetween(d => 25)
-                .compactMarginPair(d => 50)
-                .linkUpdate(function (d, i, arr) {
-                    d3.select(this)
-                        .attr("stroke", "#555") // Darker link lines
-                        .attr("stroke-width", 1.5);
-                })
-                .nodeContent(function (d, i, arr, state) {
-                    // This HTML builds the exact look of your image
-                    return `
-                        <div class="node-box">
-                            <div class="node-header">
-                                ${d.data.department}
-                                <div class="node-stats">
-                                    (Total: ${d.data.total} / Regular: ${d.data.regular}, Outsourced: ${d.data.outsourced})
-                                </div>
-                            </div>
-                            <div class="node-content">
-                                ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
+    function renderChart(data) {
+        // Validation: Ensure ID 1 exists
+        const root = data.find(d => d.id == '1');
+        if (!root) {
+             throw new Error("Row with ID 1 not found. Check CSV content.");
+        }
+
+        chart = new d3.OrgChart()
+            .container('#chart-container')
+            .data(data)
+            .nodeHeight(d => 100)
+            .nodeWidth(d => 220)
+            .childrenMargin(d => 50)
+            .compactMarginBetween(d => 25)
+            .compactMarginPair(d => 50)
+            .nodeContent(function (d) {
+                return `
+                    <div class="node-box">
+                        <div class="node-header">
+                            ${d.data.department}
+                            <div class="node-stats">
+                                (Total: ${d.data.total || 0} / Reg: ${d.data.regular || 0})
                             </div>
                         </div>
-                    `;
-                })
-                .render();
-        }
+                        <div class="node-content">
+                            ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
+                        </div>
+                    </div>
+                `;
+            })
+            .render();
+            
+        chart.fit(); // Auto-zoom to fit screen
+    }
 
-        function downloadPdf() {
-            chart.exportImg({
-                save: false,
-                full: true,
-                onLoad: (base64) => {
-                    var pdf = new jspdf.jsPDF({
-                        orientation: "landscape",
-                        unit: "px",
-                        format: [chart.svgWidth(), chart.svgHeight()]
-                    });
-                    pdf.addImage(base64, 'JPEG', 0, 0);
-                    pdf.save('Company_Chart.pdf');
-                }
-            });
-        }
-    </script>
-</body>
-</html>
+    function downloadPdf() {
+        if(!chart) return;
+        chart.exportImg({
+            save: false,
+            full: true,
+            onLoad: (base64) => {
+                var pdf = new jspdf.jsPDF({
+                    orientation: "landscape",
+                    unit: "px",
+                    format: [chart.svgWidth(), chart.svgHeight()]
+                });
+                pdf.addImage(base64, 'JPEG', 0, 0);
+                pdf.save('Company_Chart.pdf');
+            }
+        });
+    }
+</script>
