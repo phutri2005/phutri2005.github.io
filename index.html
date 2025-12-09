@@ -47,117 +47,133 @@
     </div>
 
     <div id="chart-container"></div>
-
-    <script>
-        // --- CONFIGURATION ---
-        // REPLACE THE ID BELOW WITH YOUR GOOGLE SHEET ID
-const sheetId='1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
-        
-        // --- LOGGING FUNCTION ---
-        function log(msg, isError = false) {
-            const c = document.getElementById('debug-console');
+<script>
+    // --- CONFIGURATION ---
+    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; // Your Sheet ID
+    
+    // --- LOGGING UTILITY ---
+    function log(msg, isError = false) {
+        const c = document.getElementById('debug-console');
+        if (c) {
             c.innerHTML += `<div style="color:${isError ? 'red' : '#0f0'}; border-bottom:1px solid #333;">${isError ? '[ERR]' : '[OK]'} ${msg}</div>`;
             c.scrollTop = c.scrollHeight;
         }
+        console.log(msg);
+    }
 
-        // --- ERROR CATCHER ---
-        window.onerror = function(msg, url, line) {
-            log(`${msg} (Line ${line})`, true);
-        };
+    // --- MAIN ---
+    loadChart();
 
-        // --- MAIN LOGIC ---
-        if (typeof Papa === 'undefined') {
-            log("CRITICAL: PapaParse library failed to load.", true);
-        } else {
-            log("Libraries loaded successfully.");
-            loadChart();
-        }
+    function loadChart() {
+        // Use proxy to fetch CSV
+        const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+        const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
 
-        function loadChart() {
-            // Mobile Fix: Use AllOrigins Proxy to avoid CORS errors
-            const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-            const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
+        log("Fetching data...");
 
-            log("Fetching data from Google Sheet...");
+        Papa.parse(proxyUrl, {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: function(results) {
+                let cleanData = results.data;
 
-            Papa.parse(proxyUrl, {
-                download: true,
-                header: true,
-                skipEmptyLines: true,
-                complete: function(results) {
-                    log(`Data received. Rows: ${results.data.length}`);
-                    if(results.data.length < 2) {
-                        log("Warning: Data seems empty or invalid.", true);
-                        return;
-                    }
-                    try {
-                        renderChart(results.data);
-                        log("Chart rendered!");
-                    } catch (e) {
-                        log("Render failed: " + e.message, true);
-                    }
-                },
-                error: function(err) {
-                    log("Network Error: " + err.message, true);
-                    log("Tip: Check internet connection or Sheet ID.", true);
+                // --- THE MAGIC FIX IS HERE ---
+                // Check if data is stuck in one column (Bad Paste Issue)
+                if (cleanData.length > 0 && Object.keys(cleanData[0]).length === 1) {
+                    log("Detected 'One Column' issue. Auto-fixing data...");
+                    cleanData = fixBadPaste(results.data, results.meta.fields);
                 }
+                
+                try {
+                    renderChart(cleanData);
+                    log("Chart rendered successfully!");
+                } catch (e) {
+                    log("Render failed: " + e.message, true);
+                }
+            },
+            error: function(err) {
+                log("Network Error. Check Sheet ID.", true);
+            }
+        });
+    }
+
+    // Function to un-mess data pasted into Column A
+    function fixBadPaste(data, fields) {
+        // 'fields' usually contains the first row header like "id,parent,name..."
+        // We need to parse the keys and the values manually.
+        
+        const realHeaders = fields[0].split(','); // Split the header string
+        
+        return data.map(row => {
+            // Get the single value string from the row object
+            const badValue = Object.values(row)[0]; 
+            // Split it by comma
+            const values = badValue.split(',');
+            
+            // Rebuild the object correctly
+            let newRow = {};
+            realHeaders.forEach((header, index) => {
+                // Remove quotes if present
+                let val = values[index] || "";
+                newRow[header.trim()] = val.replace(/^"|"$/g, '').trim(); 
             });
+            return newRow;
+        });
+    }
+
+    function renderChart(data) {
+        // Verify we have an ID column now
+        if (!data[0].id) {
+            throw new Error("Could not find 'id' column even after auto-fixing.");
         }
 
-        let chart;
-
-        function renderChart(data) {
-            // Verify ID '1' exists (Root node)
-            if (!data.find(d => d.id == '1')) {
-                throw new Error("Row with ID 1 not found. Is your CSV empty?");
-            }
-
-            chart = new d3.OrgChart()
-                .container('#chart-container')
-                .data(data)
-                .nodeHeight(d => 100)
-                .nodeWidth(d => 220)
-                .childrenMargin(d => 50)
-                .compactMarginBetween(d => 25)
-                .compactMarginPair(d => 50)
-                .nodeContent(function (d) {
-                    return `
-                        <div class="node-box">
-                            <div class="node-header">
-                                ${d.data.department}
-                                <div class="node-stats">
-                                    (Total: ${d.data.total} / Reg: ${d.data.regular})
-                                </div>
-                            </div>
-                            <div class="node-content">
-                                ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
+        const chart = new d3.OrgChart()
+            .container('#chart-container')
+            .data(data)
+            .nodeHeight(d => 100)
+            .nodeWidth(d => 220)
+            .childrenMargin(d => 50)
+            .compactMarginBetween(d => 25)
+            .compactMarginPair(d => 50)
+            .nodeContent(function (d) {
+                return `
+                    <div class="node-box">
+                        <div class="node-header">
+                            ${d.data.department}
+                            <div class="node-stats">
+                                (Total: ${d.data.total || 0} / Reg: ${d.data.regular || 0})
                             </div>
                         </div>
-                    `;
-                })
-                .render();
-            
-            chart.fit();
-        }
+                        <div class="node-content">
+                            ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
+                        </div>
+                    </div>
+                `;
+            })
+            .render();
+        chart.fit();
+        window.chart = chart; // Save for export
+    }
 
-        function downloadPdf() {
-            if(!chart) { log("No chart to download", true); return; }
-            log("Generating PDF...");
-            chart.exportImg({
-                save: false,
-                full: true,
-                onLoad: (base64) => {
-                    var pdf = new jspdf.jsPDF({
-                        orientation: "landscape",
-                        unit: "px",
-                        format: [chart.svgWidth(), chart.svgHeight()]
-                    });
-                    pdf.addImage(base64, 'JPEG', 0, 0);
-                    pdf.save('Company_Chart.pdf');
-                    log("PDF Downloaded.");
-                }
-            });
-        }
-    </script>
+    function downloadPdf() {
+        if(!window.chart) return;
+        window.chart.exportImg({
+            save: false,
+            full: true,
+            onLoad: (base64) => {
+                var pdf = new jspdf.jsPDF({
+                    orientation: "landscape",
+                    unit: "px",
+                    format: [window.chart.svgWidth(), window.chart.svgHeight()]
+                });
+                pdf.addImage(base64, 'JPEG', 0, 0);
+                pdf.save('Company_Chart.pdf');
+            }
+        });
+    }
+</script>
+
+    
 </body>
 </html>
