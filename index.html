@@ -1,108 +1,163 @@
-<div id="debug-console" style="background: #333; color: #0f0; padding: 10px; font-family: monospace; font-size: 12px; margin-top: 20px; border-radius: 5px;">
-    <strong>Debug Log:</strong><br>
-</div>
-
-<script>
-    // --- 1. SETUP VISUAL LOGGING (So you can see errors on mobile) ---
-    function logToScreen(message, isError = false) {
-        const consoleDiv = document.getElementById('debug-console');
-        const line = document.createElement('div');
-        line.style.color = isError ? '#ff4444' : '#0f0';
-        line.style.borderBottom = '1px solid #444';
-        line.style.padding = '4px 0';
-        line.textContent = (isError ? '[ERROR] ' : '[INFO] ') + message;
-        consoleDiv.appendChild(line);
-    }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Company Org Chart</title>
     
-    // Capture standard errors
-    window.onerror = function(msg, url, line) {
-        logToScreen(`${msg} (Line ${line})`, true);
-    };
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-org-chart@2.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-flextree@2.1.2/build/d3-flextree.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.3.1/jspdf.umd.min.js"></script>
 
-    // --- 2. CHART CODE ---
-    
-   
-    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
-    const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-    
-    // We use a proxy to bypass CORS restrictions on mobile/web
-    const csvUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
-
-    logToScreen("Attempting to fetch data from: " + csvUrl);
-
-    Papa.parse(csvUrl, {
-        download: true,
-        header: true,
-        skipEmptyLines: true,
-        complete: function(results) {
-            logToScreen(`Download complete! Found ${results.data.length} rows.`);
-            
-            if (results.data.length === 0) {
-                logToScreen("Error: Data is empty. Check your Sheet permissions (Anyone with link?).", true);
-                return;
-            }
-
-            try {
-                renderChart(results.data);
-                logToScreen("Chart rendered successfully!");
-            } catch (e) {
-                logToScreen("Render Error: " + e.message, true);
-            }
-        },
-        error: function(err) {
-            logToScreen("CSV Parse Error: " + err.message, true);
-        }
-    });
-
-    function renderChart(data) {
-        // Validation: Ensure ID 1 exists
-        const root = data.find(d => d.id == '1');
-        if (!root) {
-             throw new Error("Row with ID 1 not found. Check CSV content.");
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6f8; margin: 0; padding: 10px; }
+        
+        /* Debug Console Style */
+        #debug-console {
+            background: #222; color: #0f0; padding: 10px; 
+            font-family: monospace; font-size: 11px; margin-bottom: 20px; 
+            border-radius: 5px; height: 150px; overflow-y: scroll;
+            border: 2px solid #555;
         }
 
-        chart = new d3.OrgChart()
-            .container('#chart-container')
-            .data(data)
-            .nodeHeight(d => 100)
-            .nodeWidth(d => 220)
-            .childrenMargin(d => 50)
-            .compactMarginBetween(d => 25)
-            .compactMarginPair(d => 50)
-            .nodeContent(function (d) {
-                return `
-                    <div class="node-box">
-                        <div class="node-header">
-                            ${d.data.department}
-                            <div class="node-stats">
-                                (Total: ${d.data.total || 0} / Reg: ${d.data.regular || 0})
+        /* Chart Controls */
+        .controls { text-align: center; margin-bottom: 10px; }
+        button {
+            padding: 10px 15px; background-color: #333; color: white; 
+            border: none; border-radius: 4px; font-size: 14px; margin: 5px;
+        }
+
+        /* Chart Styles */
+        #chart-container { height: 600px; background-color: white; border-radius: 8px; border: 1px solid #ddd; }
+        .node-box { border: 1px solid #999; background: #fff; width: 220px; }
+        .node-header { background-color: #ccc; padding: 8px; text-align: center; font-weight: bold; border-bottom: 1px solid #999; font-size: 14px; }
+        .node-stats { font-size: 11px; font-weight: normal; margin-top: 4px; }
+        .node-content { padding: 10px; text-align: center; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+    <div id="debug-console"><strong>System Status:</strong> Loading libraries...<br></div>
+
+    <div class="controls">
+        <button onclick="downloadPdf()">Download PDF</button>
+        <button onclick="if(chart) chart.fit()">Fit Screen</button>
+    </div>
+
+    <div id="chart-container"></div>
+
+    <script>
+        // --- CONFIGURATION ---
+        // REPLACE THE ID BELOW WITH YOUR GOOGLE SHEET ID
+        const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
+        
+        // --- LOGGING FUNCTION ---
+        function log(msg, isError = false) {
+            const c = document.getElementById('debug-console');
+            c.innerHTML += `<div style="color:${isError ? 'red' : '#0f0'}; border-bottom:1px solid #333;">${isError ? '[ERR]' : '[OK]'} ${msg}</div>`;
+            c.scrollTop = c.scrollHeight;
+        }
+
+        // --- ERROR CATCHER ---
+        window.onerror = function(msg, url, line) {
+            log(`${msg} (Line ${line})`, true);
+        };
+
+        // --- MAIN LOGIC ---
+        if (typeof Papa === 'undefined') {
+            log("CRITICAL: PapaParse library failed to load.", true);
+        } else {
+            log("Libraries loaded successfully.");
+            loadChart();
+        }
+
+        function loadChart() {
+            // Mobile Fix: Use AllOrigins Proxy to avoid CORS errors
+            const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+            const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
+
+            log("Fetching data from Google Sheet...");
+
+            Papa.parse(proxyUrl, {
+                download: true,
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    log(`Data received. Rows: ${results.data.length}`);
+                    if(results.data.length < 2) {
+                        log("Warning: Data seems empty or invalid.", true);
+                        return;
+                    }
+                    try {
+                        renderChart(results.data);
+                        log("Chart rendered!");
+                    } catch (e) {
+                        log("Render failed: " + e.message, true);
+                    }
+                },
+                error: function(err) {
+                    log("Network Error: " + err.message, true);
+                    log("Tip: Check internet connection or Sheet ID.", true);
+                }
+            });
+        }
+
+        let chart;
+
+        function renderChart(data) {
+            // Verify ID '1' exists (Root node)
+            if (!data.find(d => d.id == '1')) {
+                throw new Error("Row with ID 1 not found. Is your CSV empty?");
+            }
+
+            chart = new d3.OrgChart()
+                .container('#chart-container')
+                .data(data)
+                .nodeHeight(d => 100)
+                .nodeWidth(d => 220)
+                .childrenMargin(d => 50)
+                .compactMarginBetween(d => 25)
+                .compactMarginPair(d => 50)
+                .nodeContent(function (d) {
+                    return `
+                        <div class="node-box">
+                            <div class="node-header">
+                                ${d.data.department}
+                                <div class="node-stats">
+                                    (Total: ${d.data.total} / Reg: ${d.data.regular})
+                                </div>
+                            </div>
+                            <div class="node-content">
+                                ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
                             </div>
                         </div>
-                        <div class="node-content">
-                            ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
-                        </div>
-                    </div>
-                `;
-            })
-            .render();
+                    `;
+                })
+                .render();
             
-        chart.fit(); // Auto-zoom to fit screen
-    }
+            chart.fit();
+        }
 
-    function downloadPdf() {
-        if(!chart) return;
-        chart.exportImg({
-            save: false,
-            full: true,
-            onLoad: (base64) => {
-                var pdf = new jspdf.jsPDF({
-                    orientation: "landscape",
-                    unit: "px",
-                    format: [chart.svgWidth(), chart.svgHeight()]
-                });
-                pdf.addImage(base64, 'JPEG', 0, 0);
-                pdf.save('Company_Chart.pdf');
-            }
-        });
-    }
-</script>
+        function downloadPdf() {
+            if(!chart) { log("No chart to download", true); return; }
+            log("Generating PDF...");
+            chart.exportImg({
+                save: false,
+                full: true,
+                onLoad: (base64) => {
+                    var pdf = new jspdf.jsPDF({
+                        orientation: "landscape",
+                        unit: "px",
+                        format: [chart.svgWidth(), chart.svgHeight()]
+                    });
+                    pdf.addImage(base64, 'JPEG', 0, 0);
+                    pdf.save('Company_Chart.pdf');
+                    log("PDF Downloaded.");
+                }
+            });
+        }
+    </script>
+</body>
+</html>
