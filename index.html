@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Company Org Chart</title>
+    <title>Company Org Chart (Smart Fix)</title>
     
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3-org-chart@2.6.0"></script>
@@ -13,33 +13,31 @@
 
     <style>
         body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6f8; margin: 0; padding: 10px; }
-        
-        /* Debug Console Style */
+        /* Debug Console */
         #debug-console {
             background: #222; color: #0f0; padding: 10px; 
             font-family: monospace; font-size: 11px; margin-bottom: 20px; 
-            border-radius: 5px; height: 150px; overflow-y: scroll;
+            border-radius: 5px; height: 120px; overflow-y: scroll;
             border: 2px solid #555;
         }
-
         /* Chart Controls */
         .controls { text-align: center; margin-bottom: 10px; }
         button {
             padding: 10px 15px; background-color: #333; color: white; 
-            border: none; border-radius: 4px; font-size: 14px; margin: 5px;
+            border: none; border-radius: 4px; font-size: 14px; margin: 5px; cursor:pointer;
         }
-
-        /* Chart Styles */
+        button:active { background-color: #555; }
+        
+        /* Chart Design */
         #chart-container { height: 600px; background-color: white; border-radius: 8px; border: 1px solid #ddd; }
-        .node-box { border: 1px solid #999; background: #fff; width: 220px; }
-        .node-header { background-color: #ccc; padding: 8px; text-align: center; font-weight: bold; border-bottom: 1px solid #999; font-size: 14px; }
-        .node-stats { font-size: 11px; font-weight: normal; margin-top: 4px; }
-        .node-content { padding: 10px; text-align: center; font-size: 14px; }
+        .node-box { height:100%; background:#fff; border:1px solid #999; display:flex; flex-direction:column; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
+        .node-header { background:#e0e0e0; padding:5px; text-align:center; border-bottom:1px solid #ccc; }
+        .node-content { padding:10px; text-align:center; flex-grow:1; }
     </style>
 </head>
 <body>
 
-    <div id="debug-console"><strong>System Status:</strong> Loading libraries...<br></div>
+    <div id="debug-console"><strong>System Status:</strong> Initializing Smart Fix...<br></div>
 
     <div class="controls">
         <button onclick="downloadPdf()">Download PDF</button>
@@ -47,167 +45,176 @@
     </div>
 
     <div id="chart-container"></div>
-<script>
-    // --- CONFIGURATION ---
-    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
-    
-    // --- LOGGING ---
-    function log(msg, isError = false) {
-        const c = document.getElementById('debug-console');
-        if(c) {
-            c.innerHTML += `<div style="color:${isError ? 'red' : '#0f0'}; border-bottom:1px solid #333;">${isError ? '[ERR]' : '[OK]'} ${msg}</div>`;
-            c.scrollTop = c.scrollHeight;
+
+    <script>
+        // --- 1. SETTINGS ---
+        const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
+        
+        // --- 2. LOGGING ---
+        function log(msg, isError = false) {
+            const c = document.getElementById('debug-console');
+            if(c) {
+                c.innerHTML += `<div style="color:${isError ? '#ff4444' : '#00ff00'}; border-bottom:1px solid #333;">${isError ? '[ERR]' : '[OK]'} ${msg}</div>`;
+                c.scrollTop = c.scrollHeight;
+            }
         }
-        console.log(msg);
-    }
 
-    loadChart();
-
-    function loadChart() {
-        // Proxy to get data
+        // --- 3. MAIN LOGIC ---
         const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+        // Use AllOrigins proxy to bypass mobile security blocks
         const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
 
-        log("Fetching data...");
+        log("Fetching data from Google Sheet...");
 
         Papa.parse(proxyUrl, {
             download: true,
             header: true, 
-            skipEmptyLines: true, // Step 1: Ignore empty lines
+            skipEmptyLines: true,
             complete: function(results) {
-                let cleanData = results.data;
-
-                // Step 2: Fix "One Column" issue if needed
-                if (cleanData.length > 0 && Object.keys(cleanData[0]).length === 1) {
-                    log("Auto-fixing column format...");
-                    cleanData = fixBadPaste(results.data);
-                }
-
-                // Step 3: CRITICAL CLEANUP (Fixes "Multiple Roots")
-                // Remove rows where ID is empty or parentId is literally "parentId" (header repeat)
-                cleanData = cleanData.filter(row => {
-                    // Keep row only if it has an ID
-                    if (!row.id || row.id.trim() === "") return false;
-                    // Remove if it's a header row accidentally read as data
-                    if (row.id === "id") return false;
-                    return true;
-                });
-
-                // Step 4: Validate Roots
-                const roots = cleanData.filter(d => !d.parentId || d.parentId.trim() === "");
-                if (roots.length > 1) {
-                    log(`Warning: Found ${roots.length} roots. Trying to auto-fix...`, true);
-                    // Keep only the one with ID "1" as the root
-                    cleanData = cleanData.filter(d => {
-                        // If it has a parent, keep it
-                        if (d.parentId && d.parentId.trim() !== "") return true;
-                        // If it's a root, only keep ID "1"
-                        return d.id == "1";
-                    });
-                }
-
-                try {
-                    renderChart(cleanData);
-                    log("Chart rendered successfully!");
-                } catch (e) {
-                    log("Render failed: " + e.message, true);
-                }
+                processData(results.data);
             },
             error: function(err) {
                 log("Network Error: " + err.message, true);
             }
         });
-    }
 
-    // Helper to fix data pasted into one column
-    function fixBadPaste(data) {
-        // Detect if the data uses quotes (like "1","2") or just commas (1,2)
-        const sample = Object.values(data[0])[0];
-        const usesQuotes = sample.includes('"');
+        function processData(data) {
+            let cleanData = data;
 
-        return data.map(row => {
-            let rawLine = Object.values(row)[0];
-            let values;
-            
-            if (usesQuotes) {
-                // Split by "," (quote comma quote)
-                values = rawLine.split('","').map(v => v.replace(/^"|"$/g, '')); 
-            } else {
-                // Simple split
-                values = rawLine.split(',');
+            // FIX 1: Detect if pasted into one column
+            if (cleanData.length > 0 && Object.keys(cleanData[0]).length === 1) {
+                log("Detected single-column paste. Splitting columns...");
+                cleanData = fixBadPaste(cleanData);
             }
+
+            // FIX 2: Filter out header row if it got mixed in
+            cleanData = cleanData.filter(d => d.id !== 'id' && d.id !== '');
+
+            // FIX 3: THE "MISSING PARENT" SMART FIX
+            // We build a map of "Department Name" -> "ID" to help find parents
+            const nameToId = {};
+            cleanData.forEach(d => {
+                if(d.department) nameToId[d.department.trim().toLowerCase()] = d.id;
+            });
+
+            log("Verifying Parent IDs...");
+            let fixedCount = 0;
             
-            // Map to specific columns (Hardcoded order matches your CSV)
-            return {
-                id: values[0]?.trim(),
-                parentId: values[1]?.trim(),
-                department: values[2]?.trim(),
-                manager: values[3]?.trim(),
-                rank: values[4]?.trim(),
-                total: values[5]?.trim(),
-                regular: values[6]?.trim(),
-                outsourced: values[7]?.trim(),
-                staff: values[8]?.trim() || ""
-            };
-        });
-    }
+            cleanData.forEach(d => {
+                if (!d.parentId) return; // Root node has no parent
 
-    function renderChart(data) {
-        if (!data || data.length === 0) throw new Error("No valid data found after cleanup.");
+                // If Parent ID is NOT a number (e.g., "Vietnam IT Corp")
+                if (isNaN(d.parentId) && d.parentId.length > 3) {
+                    const parentName = d.parentId.trim().toLowerCase();
+                    if (nameToId[parentName]) {
+                        // We found the numeric ID for this name! Swap it.
+                        d.parentId = nameToId[parentName];
+                        fixedCount++;
+                    } else {
+                        log(`Warning: Could not find ID for parent name '${d.parentId}'`, true);
+                    }
+                }
+            });
 
-        const chart = new d3.OrgChart()
-            .container('#chart-container')
-            .data(data)
-            .nodeHeight(d => 200) // Taller for staff lists
-            .nodeWidth(d => 250)  // Wider for names
-            .childrenMargin(d => 50)
-            .compactMarginBetween(d => 25)
-            .compactMarginPair(d => 50)
-            .nodeContent(function (d) {
-                // Handle staff lists (split by semicolon)
-                const staffHTML = d.data.staff 
-                    ? d.data.staff.split(';').map(s => `<div style="font-size:10px; margin-bottom:2px;">• ${s.trim()}</div>`).join('') 
-                    : '';
+            if(fixedCount > 0) log(`Auto-corrected ${fixedCount} text-based Parent IDs.`);
 
-                return `
-                    <div class="node-box" style="height:100%; background:#fff; border:1px solid #999; display:flex; flex-direction:column;">
-                        <div class="node-header" style="background:#eee; padding:5px; text-align:center; border-bottom:1px solid #ccc;">
-                            <strong>${d.data.department}</strong>
-                            <div style="font-size:10px;">(Tot: ${d.data.total} / Reg: ${d.data.regular})</div>
-                        </div>
-                        <div class="node-content" style="padding:10px; text-align:center; flex-grow:1;">
-                            <div style="font-weight:bold; margin-bottom:5px;">${d.data.manager} <span style="color:#666">(${d.data.rank})</span></div>
-                            <div style="text-align:left; border-top:1px solid #eee; padding-top:5px; color:#444;">
-                                ${staffHTML}
+            try {
+                renderChart(cleanData);
+                log("Chart rendered successfully!");
+            } catch (e) {
+                log("Render Error: " + e.message, true);
+            }
+        }
+
+        // Helper to un-clump single column data
+        function fixBadPaste(data) {
+            // Detect quote style
+            const sample = Object.values(data[0])[0];
+            const usesQuotes = sample.includes('"');
+            
+            return data.map(row => {
+                let rawLine = Object.values(row)[0];
+                let v;
+                if (usesQuotes) {
+                    // Split by "," (quote comma quote) and clean quotes
+                    v = rawLine.split('","').map(val => val.replace(/^"|"$/g, '').trim());
+                } else {
+                    v = rawLine.split(',').map(val => val.trim());
+                }
+                
+                // Map array to object keys
+                return {
+                    id: v[0],
+                    parentId: v[1],
+                    department: v[2],
+                    manager: v[3],
+                    rank: v[4],
+                    total: v[5],
+                    regular: v[6],
+                    outsourced: v[7],
+                    staff: v[8] || ""
+                };
+            });
+        }
+
+        let chart;
+
+        function renderChart(data) {
+            chart = new d3.OrgChart()
+                .container('#chart-container')
+                .data(data)
+                .nodeHeight(d => 180) 
+                .nodeWidth(d => 250)
+                .childrenMargin(d => 50)
+                .compactMarginBetween(d => 20)
+                .compactMarginPair(d => 40)
+                .nodeContent(function (d) {
+                    const staffList = d.data.staff 
+                        ? d.data.staff.split(';').map(s => `<div style="font-size:10px; color:#555;">• ${s.trim()}</div>`).join('') 
+                        : '';
+
+                    return `
+                        <div class="node-box">
+                            <div class="node-header">
+                                <strong>${d.data.department}</strong>
+                                <div style="font-size:11px; margin-top:2px;">
+                                    (Total: ${d.data.total || 0} / Reg: ${d.data.regular || 0})
+                                </div>
+                            </div>
+                            <div class="node-content">
+                                <div style="font-weight:bold; margin-bottom:8px;">
+                                    ${d.data.manager} 
+                                    <span style="color:#666; font-weight:normal">(${d.data.rank})</span>
+                                </div>
+                                <div style="text-align:left; border-top:1px solid #eee; padding-top:5px; height:80px; overflow-y:auto;">
+                                    ${staffList}
+                                </div>
                             </div>
                         </div>
-                    </div>
-                `;
-            })
-            .render();
-        
-        chart.fit();
-        window.chart = chart; 
-    }
+                    `;
+                })
+                .render();
+            chart.fit();
+        }
 
-    function downloadPdf() {
-        if(!window.chart) return;
-        window.chart.exportImg({
-            save: false,
-            full: true,
-            onLoad: (base64) => {
-                var pdf = new jspdf.jsPDF({
-                    orientation: "landscape",
-                    unit: "px",
-                    format: [window.chart.svgWidth(), window.chart.svgHeight()]
-                });
-                pdf.addImage(base64, 'JPEG', 0, 0);
-                pdf.save('Company_Chart.pdf');
-            }
-        });
-    }
-</script>
-
-    
+        function downloadPdf() {
+            if(!chart) return;
+            log("Generating PDF...");
+            chart.exportImg({
+                save: false,
+                full: true,
+                onLoad: (base64) => {
+                    var pdf = new jspdf.jsPDF({
+                        orientation: "landscape",
+                        unit: "px",
+                        format: [chart.svgWidth(), chart.svgHeight()]
+                    });
+                    pdf.addImage(base64, 'JPEG', 0, 0);
+                    pdf.save('Company_Chart.pdf');
+                    log("PDF Download complete.");
+                }
+            });
+        }
+    </script>
 </body>
 </html>
