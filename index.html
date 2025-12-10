@@ -49,23 +49,22 @@
     <div id="chart-container"></div>
 <script>
     // --- CONFIGURATION ---
-    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; // Your Sheet ID
+    const sheetId = '1FsL3YWzuyp3tQxeBhGzUAw0_Jn9sx5F4qyzPNojh-nM'; 
     
-    // --- LOGGING UTILITY ---
+    // --- LOGGING ---
     function log(msg, isError = false) {
         const c = document.getElementById('debug-console');
-        if (c) {
+        if(c) {
             c.innerHTML += `<div style="color:${isError ? 'red' : '#0f0'}; border-bottom:1px solid #333;">${isError ? '[ERR]' : '[OK]'} ${msg}</div>`;
             c.scrollTop = c.scrollHeight;
         }
         console.log(msg);
     }
 
-    // --- MAIN ---
     loadChart();
 
     function loadChart() {
-        // Use proxy to fetch CSV
+        // Proxy to get data
         const rawUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
         const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(rawUrl);
 
@@ -73,18 +72,40 @@
 
         Papa.parse(proxyUrl, {
             download: true,
-            header: true,
-            skipEmptyLines: true,
+            header: true, 
+            skipEmptyLines: true, // Step 1: Ignore empty lines
             complete: function(results) {
                 let cleanData = results.data;
 
-                // --- THE MAGIC FIX IS HERE ---
-                // Check if data is stuck in one column (Bad Paste Issue)
+                // Step 2: Fix "One Column" issue if needed
                 if (cleanData.length > 0 && Object.keys(cleanData[0]).length === 1) {
-                    log("Detected 'One Column' issue. Auto-fixing data...");
-                    cleanData = fixBadPaste(results.data, results.meta.fields);
+                    log("Auto-fixing column format...");
+                    cleanData = fixBadPaste(results.data);
                 }
-                
+
+                // Step 3: CRITICAL CLEANUP (Fixes "Multiple Roots")
+                // Remove rows where ID is empty or parentId is literally "parentId" (header repeat)
+                cleanData = cleanData.filter(row => {
+                    // Keep row only if it has an ID
+                    if (!row.id || row.id.trim() === "") return false;
+                    // Remove if it's a header row accidentally read as data
+                    if (row.id === "id") return false;
+                    return true;
+                });
+
+                // Step 4: Validate Roots
+                const roots = cleanData.filter(d => !d.parentId || d.parentId.trim() === "");
+                if (roots.length > 1) {
+                    log(`Warning: Found ${roots.length} roots. Trying to auto-fix...`, true);
+                    // Keep only the one with ID "1" as the root
+                    cleanData = cleanData.filter(d => {
+                        // If it has a parent, keep it
+                        if (d.parentId && d.parentId.trim() !== "") return true;
+                        // If it's a root, only keep ID "1"
+                        return d.id == "1";
+                    });
+                }
+
                 try {
                     renderChart(cleanData);
                     log("Chart rendered successfully!");
@@ -93,67 +114,80 @@
                 }
             },
             error: function(err) {
-                log("Network Error. Check Sheet ID." +err, true);
+                log("Network Error: " + err.message, true);
             }
         });
     }
 
-    // Function to un-mess data pasted into Column A
-    function fixBadPaste(data, fields) {
-        // 'fields' usually contains the first row header like "id,parent,name..."
-        // We need to parse the keys and the values manually.
-        
-        const realHeaders = fields[0].split(','); // Split the header string
-        
+    // Helper to fix data pasted into one column
+    function fixBadPaste(data) {
+        // Detect if the data uses quotes (like "1","2") or just commas (1,2)
+        const sample = Object.values(data[0])[0];
+        const usesQuotes = sample.includes('"');
+
         return data.map(row => {
-            // Get the single value string from the row object
-            const badValue = Object.values(row)[0]; 
-            // Split it by comma
-            const values = badValue.split(',');
+            let rawLine = Object.values(row)[0];
+            let values;
             
-            // Rebuild the object correctly
-            let newRow = {};
-            realHeaders.forEach((header, index) => {
-                // Remove quotes if present
-                let val = values[index] || "";
-                newRow[header.trim()] = val.replace(/^"|"$/g, '').trim(); 
-            });
-            return newRow;
+            if (usesQuotes) {
+                // Split by "," (quote comma quote)
+                values = rawLine.split('","').map(v => v.replace(/^"|"$/g, '')); 
+            } else {
+                // Simple split
+                values = rawLine.split(',');
+            }
+            
+            // Map to specific columns (Hardcoded order matches your CSV)
+            return {
+                id: values[0]?.trim(),
+                parentId: values[1]?.trim(),
+                department: values[2]?.trim(),
+                manager: values[3]?.trim(),
+                rank: values[4]?.trim(),
+                total: values[5]?.trim(),
+                regular: values[6]?.trim(),
+                outsourced: values[7]?.trim(),
+                staff: values[8]?.trim() || ""
+            };
         });
     }
 
     function renderChart(data) {
-        // Verify we have an ID column now
-        if (!data[0].id) {
-            throw new Error("Could not find 'id' column even after auto-fixing.");
-        }
+        if (!data || data.length === 0) throw new Error("No valid data found after cleanup.");
 
         const chart = new d3.OrgChart()
             .container('#chart-container')
             .data(data)
-            .nodeHeight(d => 100)
-            .nodeWidth(d => 220)
+            .nodeHeight(d => 200) // Taller for staff lists
+            .nodeWidth(d => 250)  // Wider for names
             .childrenMargin(d => 50)
             .compactMarginBetween(d => 25)
             .compactMarginPair(d => 50)
             .nodeContent(function (d) {
+                // Handle staff lists (split by semicolon)
+                const staffHTML = d.data.staff 
+                    ? d.data.staff.split(';').map(s => `<div style="font-size:10px; margin-bottom:2px;">• ${s.trim()}</div>`).join('') 
+                    : '';
+
                 return `
-                    <div class="node-box">
-                        <div class="node-header">
-                            ${d.data.department}
-                            <div class="node-stats">
-                                (Total: ${d.data.total || 0} / Reg: ${d.data.regular || 0})
-                            </div>
+                    <div class="node-box" style="height:100%; background:#fff; border:1px solid #999; display:flex; flex-direction:column;">
+                        <div class="node-header" style="background:#eee; padding:5px; text-align:center; border-bottom:1px solid #ccc;">
+                            <strong>${d.data.department}</strong>
+                            <div style="font-size:10px;">(Tot: ${d.data.total} / Reg: ${d.data.regular})</div>
                         </div>
-                        <div class="node-content">
-                            ${d.data.manager} <span style="color:#666">(${d.data.rank})</span>
+                        <div class="node-content" style="padding:10px; text-align:center; flex-grow:1;">
+                            <div style="font-weight:bold; margin-bottom:5px;">${d.data.manager} <span style="color:#666">(${d.data.rank})</span></div>
+                            <div style="text-align:left; border-top:1px solid #eee; padding-top:5px; color:#444;">
+                                ${staffHTML}
+                            </div>
                         </div>
                     </div>
                 `;
             })
             .render();
+        
         chart.fit();
-        window.chart = chart; // Save for export
+        window.chart = chart; 
     }
 
     function downloadPdf() {
